@@ -2,6 +2,8 @@ from typing import Any
 import numpy
 import torch
 
+#  Re-implementing some of the [NGC tutorials](https://ngc-learn.readthedocs.io/en/latest/tutorials/lesson1.html) in PyTorch.
+
 class SNode:
     def __init__(self, name, dim=1, beta=1.0, leak=0.0, zeta=1.0, act_fn='identity'):
         if act_fn != 'identity':
