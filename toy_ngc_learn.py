@@ -1,3 +1,4 @@
+from typing import Any
 import numpy
 import torch
 
@@ -56,6 +57,35 @@ class SNode:
 
     def clamp(self, comp_name, value):
         self.comp[comp_name] = value
+
+class ENode:
+    def __init__(self, name, dim):
+        self.name = name
+        self.dim = dim
+        self.comp = {
+            'z': torch.zeros([1, dim]),
+            'phi(z)': torch.zeros([1, dim]),
+            'pred_targ': torch.zeros([1, dim]),
+            'pred_mu': torch.zeros([1, dim])
+        }
+
+        self.incoming_cables = []
+
+    def get_signal(self, comp_name):
+        return self.comp[comp_name]
+    
+    def step(self):
+        self.comp['z'] = self.comp['pred_targ'] - self.comp['pred_mu']
+        pass
+
+    def wire_to(self, dest_node, src_comp, dest_comp, cable_kernel):
+        if cable_kernel['type'] == 'dense':
+            cable = DCable(self, dest_node, src_comp, dest_comp, cable_kernel['init_kernels']['W_init'])
+        elif cable_kernel['type'] == 'simple':
+            cable = SCable(self, dest_node, src_comp, dest_comp)
+
+        dest_node.incoming_cables.append(cable)
+        return cable
 
 
 class Cable:
@@ -136,6 +166,11 @@ class NGCGraph:
         for (var_name, comp_name) in readout_vars:
             readouts.append((var_name, comp_name, self.nodes[var_name].get_signal(comp_name)))
         return readouts
+
+
+class GNCN_PDH:
+    def __init__(self):
+        pass
 
 
 # "Simulating an NGC Circuit with Sensory Data" from ngc-learn Lesson 1
