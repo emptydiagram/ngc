@@ -56,11 +56,18 @@ Inference (iterative latent state update): pseudocode:
 
 where:
  - $E^\ell$ is a learnable, bottom-up weight matrix for errors
- - $V^\ell$ is a learnable (recurrent) lateral inhibition / self-excitation weight matrix
+ - $V^\ell$ is a non-learnable (recurrent) lateral inhibition / self-excitation weight matrix
  - $\gamma$ is a leak coefficient that decays the latent state
     - $\gamma = 0.001$ in the MNIST implementation
  - $\beta$ is a learning rate-like hyperparameter for the iterative inference updates
     - $\beta = 0.1$ in the MNIST implementation
     - not the same as the *actual* learning rate for the weight updates, which is separate. see below
 
-TODO weight updates
+Weight update pseudogradients are calculated
+
+$$\Delta W^\ell = e^\ell (\phi^{\ell + 1}(z^{\ell+1}))^\top$$
+
+$$\Delta E^\ell = (\Delta W^\ell)^\top$$
+
+
+TODO: $\Delta M^\ell$
