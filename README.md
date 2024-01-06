@@ -16,9 +16,9 @@ where:
 
  - $W^1, \ldots, W^L$ are learnable, top-down "forward/generative" weight matrices
  - $\phi^\ell$ is the activation function for layer $\ell = 1, \ldots, L$
-    - in the code implementation, $\phi^\ell = \text{ReLU}$ for all layers $\ell$
+    - in the MNIST implementation, $\phi^\ell = \text{ReLU}$ for all layers $\ell$
  - $g^\ell$ is the activation function for $\mu^\ell$
-    - in the code implementation, $g^\ell = \text{ReLU}$ for $\ell = 1, \ldots, L-1$, and $g^0 = \text{sigmoid}$
+    - in the MNIST implementation, $g^\ell = \text{ReLU}$ for $\ell = 1, \ldots, L-1$, and $g^0 = \text{sigmoid}$
  - $\alpha_m = 0 \text{ or } 1$ is a binary parameter that determines whether "skip connections" are used for top-down predictions
     - when $\alpha_m = 1$, the model is called GNCN-PDH (short for GNCN-t2-LΣ-PDH. "PDH" = "Partially Decomposable Hierarchy"). When $\alpha_m = 0$, they call it GNCN-t2-LΣ
  - $M^2, \ldots, M^L$ are learnable weight matrices used when $\alpha_m = 1$
@@ -40,3 +40,27 @@ $$\mathcal{L}^\ell = \| e^\ell \|_2^2$$
 $$\mathcal{L} = \sum_{\ell=0}^{L-1} \mathcal{L}^\ell$$
 
 However, unlike with backprop-based schemes, in NGC, learning at each layer aims to minimize a local loss function, rather than a global one.
+
+Inference (iterative latent state update): pseudocode:
+
+ - Infer($x$):
+    - $z^0 \leftarrow x$
+    - $\forall \ell = 1, \ldots, L-1$: $z^\ell \leftarrow 0$
+    - repeat $K$ times:
+       - for $\ell = 0, \ldots, L-1$:
+          - $\mu^\ell \leftarrow g^\ell[W^{\ell+1} \phi^{\ell+1}(z^{\ell+1}) + \alpha_m (M^{\ell+2} \phi^{\ell+2}(z^{\ell+2}))]$
+          - $e^\ell \leftarrow z^\ell - \mu^\ell$
+       - for $\ell = 1, \ldots, L$:
+          - $d^\ell \leftarrow E^\ell e^{\ell - 1} - e^\ell$
+          - $z^\ell \leftarrow z^\ell + \beta (- \gamma z^\ell + d^\ell - V^\ell z^\ell)$
+
+where:
+ - $E^\ell$ is a learnable, bottom-up weight matrix for errors
+ - $V^\ell$ is a learnable (recurrent) lateral inhibition / self-excitation weight matrix
+ - $\gamma$ is a leak coefficient that decays the latent state
+    - $\gamma = 0.001$ in the MNIST implementation
+ - $\beta$ is a learning rate-like hyperparameter for the iterative inference updates
+    - $\beta = 0.1$ in the MNIST implementation
+    - not the same as the *actual* learning rate for the weight updates, which is separate. see below
+
+TODO weight updates

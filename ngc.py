@@ -59,12 +59,17 @@ class GNCN_PDH:
 
         for i in range(K):
             mu[0] = self.fn_g_out(self.W[0] @ self.fn_phi(z[1]))
+            e[0] = z[0] - mu[0]
             for i in range(1, self.L):
                 mu[i] = self.fn_g_hid(self.W[i] @ self.fn_phi(z[i+1]))
                 e[i] = z[i] - mu[i]
-                di = e[i-1] @ self.E[i] - e[i]
-            pass
 
+            for i in range(1, self.L):
+                di = e[i-1] @ self.E[i] - e[i]
+                z[i] += self.beta * (-self.gamma * z[i] + di)
+
+    def update(self):
+        pass
         
 
 class Binarize(object):
@@ -98,6 +103,7 @@ def preprocess_binary_mnist(batch_size, device):
 def run_ngc(seed):
     set_seed(seed)
 
+    num_epochs = 1
     batch_size = 25
 
     device_name = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -105,10 +111,12 @@ def run_ngc(seed):
 
     loader_train = preprocess_binary_mnist(batch_size, device)
 
-    for i, (inputs, targets) in enumerate(loader_train):
-        print(inputs)
-        print(targets)
-        break
+    for epoch in range(num_epochs):
+        print(f"--- Epoch {epoch}")
+        for i, (inputs, targets) in enumerate(loader_train):
+            print(inputs)
+            print(targets)
+            break
 
 
 if __name__ == '__main__':
