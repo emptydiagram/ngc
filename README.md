@@ -35,7 +35,7 @@ While the local loss at layer $\ell = 0, \ldots, L-1$ is:
 
 $$\mathcal{L}^\ell = \| e^\ell \|_2^2$$
 
-Thus the network seeks to minimize the total discrepancy
+(that's supposed to be a norm, but GitHub's LaTeX support is broken). Thus the network seeks to minimize the total discrepancy
 
 $$\mathcal{L} = \sum_{\ell=0}^{L-1} \mathcal{L}^\ell$$
 
