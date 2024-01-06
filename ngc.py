@@ -78,9 +78,20 @@ class GNCN_PDH:
         self.e = e
 
     def calc_updates(self):
+        batch_size = self.z[0].shape[0]
+
         for l in range(0, self.L):
-            self.W[l].grad = self.fn_phi(self.z[l+1]).T @ self.e[l]
-            self.E[l].grad = self.W[l].grad.T
+            dWl = self.fn_phi(self.z[l+1]).T @ self.e[l]
+
+            # clip column norms to 1
+            dWl_col_norms = dWl.norm(dim=0, keepdim=True)
+            dWl = dWl / torch.maximum(dWl_col_norms, torch.tensor(1.0))
+            dWl = dWl / (1.0 * batch_size)
+            dEl = dWl.T
+
+            self.W[l].grad = dWl
+            self.E[l].grad = dEl
+
 
     def calc_total_discrepancy(self):
         return sum([torch.sum(e**2) for e in self.e])
@@ -118,8 +129,8 @@ def preprocess_binary_mnist(batch_size, device):
 def run_ngc(seed):
     set_seed(seed)
 
-    num_epochs = 2
-    batch_size = 25
+    num_epochs = 50
+    batch_size = 256
     lr = 0.001
     dim_inp = 784
     dim_hid = 360
@@ -134,13 +145,13 @@ def run_ngc(seed):
 
     model = GNCN_PDH(L=L, dim_top=dim_hid, dim_hid=dim_hid, dim_inp=dim_inp, weight_stddev=weight_stddev, device=device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, maximize=True)
 
     for epoch in range(num_epochs):
         print(f"--- Epoch {epoch}")
         totd = 0.
         for i, (inputs, targets) in enumerate(loader_train):
-            inputs = inputs.view([batch_size, -1])
+            inputs = inputs.view([-1, dim_inp])
             optimizer.zero_grad()
             model.infer(inputs, K=K)
             model.calc_updates()
