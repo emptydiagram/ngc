@@ -156,15 +156,17 @@ def run_ngc(seed):
     for epoch in range(num_epochs):
         print(f"--- Epoch {epoch}")
         totd = 0.
+        num_samples = 0
         for i, (inputs, targets) in enumerate(loader_train):
             inputs = inputs.view([-1, dim_inp])
             optimizer.zero_grad()
             model.infer(inputs, K=K)
             model.calc_updates()
             totd += model.calc_total_discrepancy()
+            num_samples += inputs.shape[0]
             optimizer.step()
             model.clip_weights()
-        print(f"Total discrepancy: {totd}")
+        print(f"Average Total discrepancy: {totd / (1.0 * num_samples)}")
 
 
 
