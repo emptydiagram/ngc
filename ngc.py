@@ -62,15 +62,16 @@ class GNCN_PDH:
 
         mu = [None for _ in range(self.L)]
         e = [None for _ in range(self.L)]
+        e.append(torch.zeros([batch_size, self.dim_top], device=self.device))
 
-        for i in range(K):
+        for _ in range(K):
             mu[0] = self.fn_g_out(self.fn_phi(z[1]) @ self.W[0])
             e[0] = z[0] - mu[0]
             for i in range(1, self.L):
                 mu[i] = self.fn_g_hid(self.fn_phi(z[i+1]) @ self.W[i])
                 e[i] = z[i] - mu[i]
 
-            for i in range(1, self.L):
+            for i in range(1, self.L + 1):
                 di = e[i-1] @ self.E[i-1] - e[i]
                 z[i] += self.beta * (-self.gamma * z[i] + di)
 
@@ -83,14 +84,19 @@ class GNCN_PDH:
         for l in range(0, self.L):
             dWl = self.fn_phi(self.z[l+1]).T @ self.e[l]
 
-            # clip column norms to 1
-            dWl_col_norms = dWl.norm(dim=0, keepdim=True)
-            dWl = dWl / torch.maximum(dWl_col_norms, torch.tensor(1.0))
             dWl = dWl / (1.0 * batch_size)
             dEl = dWl.T
 
             self.W[l].grad = dWl
             self.E[l].grad = dEl
+
+    def clip_weights(self):
+        # clip column norms to 1
+        for l in range(self.L):
+            Wl_col_norms = self.W[l].norm(dim=0, keepdim=True)
+            self.W[l] = self.W[l] / torch.maximum(Wl_col_norms, torch.tensor(1.0))
+            El_col_norms = self.E[l].norm(dim=0, keepdim=True)
+            self.E[l] = self.E[l] / torch.maximum(El_col_norms, torch.tensor(1.0))
 
 
     def calc_total_discrepancy(self):
@@ -130,7 +136,7 @@ def run_ngc(seed):
     set_seed(seed)
 
     num_epochs = 50
-    batch_size = 256
+    batch_size = 512
     lr = 0.001
     dim_inp = 784
     dim_hid = 360
@@ -157,6 +163,7 @@ def run_ngc(seed):
             model.calc_updates()
             totd += model.calc_total_discrepancy()
             optimizer.step()
+            model.clip_weights()
         print(f"Total discrepancy: {totd}")
 
 
