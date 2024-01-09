@@ -16,7 +16,7 @@ where:
 
  - $W^1, \ldots, W^L$ are learnable, top-down "forward/generative" weight matrices
  - $\phi^\ell$ is the activation function for layer $\ell = 1, \ldots, L$
-    - in the MNIST implementation, $\phi^\ell = \text{ReLU}$ for all layers $\ell$
+    - in the MNIST implementation, $\phi^\ell = \text{ReLU}$ for layers $\ell = 1, \ldots, L$, and $\phi^0 = \text{identity}$
  - $g^\ell$ is the activation function for $\mu^\ell$
     - in the MNIST implementation, $g^\ell = \text{ReLU}$ for $\ell = 1, \ldots, L-1$, and $g^0 = \text{sigmoid}$
  - $\alpha_m = 0 \text{ or } 1$ is a binary parameter that determines whether "skip connections" are used for top-down predictions
@@ -29,7 +29,7 @@ The connectivity diagram for GNCN-PDH is shown below. Dotted lines represent a s
 
 The error at each layer is $\ell$ is given by a simple difference:
 
-$$e^\ell = z^\ell - \mu^\ell$$
+$$e^\ell = \phi^{\ell}(z^\ell) - \mu^\ell$$
 
 While the local loss at layer $\ell = 0, \ldots, L-1$ is:
 
