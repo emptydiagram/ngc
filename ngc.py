@@ -48,6 +48,8 @@ class GNCN_PDH:
         else:
             raise NotImplementedError("Only sigmoid is supported for g_out.")
 
+        self.clip_weights()
+
 
     def parameters(self):
         return self.W + self.E
@@ -56,35 +58,37 @@ class GNCN_PDH:
     def infer(self, x, K=50):
         batch_size = x.shape[0]
         z = [x]
+        e = [torch.zeros([batch_size, self.dim_inp], device=self.device)]
         for l in range(self.L - 1):
             z.append(torch.zeros([batch_size, self.dim_hid], device=self.device))
+            e.append(torch.zeros([batch_size, self.dim_hid], device=self.device))
         z.append(torch.zeros([batch_size, self.dim_top], device=self.device))
-
-        mu = [None for _ in range(self.L)]
-        e = [None for _ in range(self.L)]
         e.append(torch.zeros([batch_size, self.dim_top], device=self.device))
 
+        mu = [None for _ in range(self.L)]
+
         for _ in range(K):
+            for i in range(1, self.L + 1):
+                di = e[i-1] @ self.E[i-1] - e[i]
+                z[i] += self.beta * (-self.gamma * z[i] + di)
+
             mu[0] = self.fn_g_out(self.fn_phi(z[1]) @ self.W[0])
             e[0] = z[0] - mu[0]
             for i in range(1, self.L):
                 mu[i] = self.fn_g_hid(self.fn_phi(z[i+1]) @ self.W[i])
-                e[i] = z[i] - mu[i]
-
-            for i in range(1, self.L + 1):
-                di = e[i-1] @ self.E[i-1] - e[i]
-                z[i] += self.beta * (-self.gamma * z[i] + di)
+                e[i] = self.fn_phi(z[i]) - mu[i]
 
         self.z = z
         self.e = e
 
     def calc_updates(self):
         batch_size = self.z[0].shape[0]
+        avg_factor = -1.0 / (batch_size)
 
         for l in range(0, self.L):
             dWl = self.fn_phi(self.z[l+1]).T @ self.e[l]
 
-            dWl = dWl / (1.0 * batch_size)
+            dWl = avg_factor * dWl
             dEl = dWl.T
 
             self.W[l].grad = dWl
@@ -94,13 +98,13 @@ class GNCN_PDH:
         # clip column norms to 1
         for l in range(self.L):
             Wl_col_norms = self.W[l].norm(dim=0, keepdim=True)
-            self.W[l] = self.W[l] / torch.maximum(Wl_col_norms, torch.tensor(1.0))
+            self.W[l].copy_(self.W[l] / torch.maximum(Wl_col_norms, torch.tensor(1.0)))
             El_col_norms = self.E[l].norm(dim=0, keepdim=True)
-            self.E[l] = self.E[l] / torch.maximum(El_col_norms, torch.tensor(1.0))
+            self.E[l].copy_(self.E[l] / torch.maximum(El_col_norms, torch.tensor(1.0)))
 
 
     def calc_total_discrepancy(self):
-        return sum([torch.sum(e**2) for e in self.e])
+        return sum([torch.sum(e**2) for e in self.e[:3]])
 
 
 
@@ -143,15 +147,18 @@ def run_ngc(seed):
     weight_stddev = 0.05
     L = 3
     K = 50
+    beta = 0.1
+    gamma = 0.001
+
 
     device_name = 'cuda' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device_name)
 
     loader_train = preprocess_binary_mnist(batch_size, device)
 
-    model = GNCN_PDH(L=L, dim_top=dim_hid, dim_hid=dim_hid, dim_inp=dim_inp, weight_stddev=weight_stddev, device=device)
+    model = GNCN_PDH(L=L, dim_top=dim_hid, dim_hid=dim_hid, dim_inp=dim_inp, weight_stddev=weight_stddev, beta=beta, gamma=gamma, device=device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, maximize=True)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, maximize=False)
 
     for epoch in range(num_epochs):
         print(f"--- Epoch {epoch}")
@@ -159,12 +166,16 @@ def run_ngc(seed):
         num_samples = 0
         for i, (inputs, targets) in enumerate(loader_train):
             inputs = inputs.view([-1, dim_inp])
-            optimizer.zero_grad()
             model.infer(inputs, K=K)
+
+            optimizer.zero_grad()
+
             model.calc_updates()
             totd += model.calc_total_discrepancy()
             num_samples += inputs.shape[0]
+
             optimizer.step()
+
             model.clip_weights()
         print(f"Average Total discrepancy: {totd / (1.0 * num_samples)}")
 
