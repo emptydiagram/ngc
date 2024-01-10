@@ -67,12 +67,18 @@ class GNCN_PDH:
         for l in range(self.L):
             state[f'W{l}'] = self.W[l]
             state[f'E{l}'] = self.E[l]
+        if self.alpha_m == 1:
+            for l in range(self.L - 1):
+                state[f'M{l}'] = self.M[l]
         return state
 
     def load_state_dict(self, state):
         for l in range(self.L):
             self.W[l] = state[f'W{l}']
             self.E[l] = state[f'E{l}']
+        if self.alpha_m == 1:
+            for l in range(self.L - 1):
+                state[f'M{l}'] = self.M[l]
 
 
     def infer(self, x, K=50):
