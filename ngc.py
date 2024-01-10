@@ -1,5 +1,6 @@
+import os
 import random
-from typing import Any
+
 import numpy as np
 import torch
 import torchvision
@@ -20,6 +21,7 @@ class GNCN_PDH:
         self.dim_inp = dim_inp
         self.beta = beta
         self.gamma = gamma # leak coefficient
+        self.alpha_m = alpha_m
 
         self.device = torch.device('cpu') if device is None else device
 
@@ -30,8 +32,14 @@ class GNCN_PDH:
         self.E = ([init_gaussian_dense([dim_inp, dim_hid], weight_stddev, self.device)]
             + [init_gaussian_dense([dim_hid, dim_hid], weight_stddev, self.device) for _ in range(L-1)])
 
-        if alpha_m != 0:
-            raise NotImplementedError("Only alpha_m = 0 is supported.")
+        # M3 is (dim_top, dim_hid)
+        # M2 is (dim_hid, dim_inp)
+        self.M = []
+        if self.alpha_m > 0:
+            self.M = ([init_gaussian_dense([dim_hid, dim_inp], weight_stddev, self.device)]
+                + [init_gaussian_dense([dim_hid, dim_hid], weight_stddev, self.device) for _ in range(L-3)]
+                + [init_gaussian_dense([dim_top, dim_hid], weight_stddev, self.device)])
+
 
         if fn_phi_name == 'relu':
             self.fn_phi = torch.relu
@@ -52,7 +60,19 @@ class GNCN_PDH:
 
 
     def parameters(self):
-        return self.W + self.E
+        return self.W + self.E + self.M
+
+    def state_dict(self):
+        state = {}
+        for l in range(self.L):
+            state[f'W{l}'] = self.W[l]
+            state[f'E{l}'] = self.E[l]
+        return state
+
+    def load_state_dict(self, state):
+        for l in range(self.L):
+            self.W[l] = state[f'W{l}']
+            self.E[l] = state[f'E{l}']
 
 
     def infer(self, x, K=50):
@@ -72,10 +92,18 @@ class GNCN_PDH:
                 di = e[i-1] @ self.E[i-1] - e[i]
                 z[i] += self.beta * (-self.gamma * z[i] + di)
 
-            mu[0] = self.fn_g_out(self.fn_phi(z[1]) @ self.W[0])
+            mu_W_input = self.fn_phi(z[1]) @ self.W[0]
+            if self.alpha_m == 1:
+                mu[0] = self.fn_g_out(mu_W_input + self.fn_phi(z[2]) @ self.M[0])
+            else:
+                mu[0] = self.fn_g_out(mu_W_input)
             e[0] = z[0] - mu[0]
             for i in range(1, self.L):
-                mu[i] = self.fn_g_hid(self.fn_phi(z[i+1]) @ self.W[i])
+                mu_W_input = self.fn_phi(z[i+1]) @ self.W[i]
+                if self.alpha_m == 1 and i < self.L - 1:
+                    mu[i] = self.fn_g_hid(mu_W_input + self.fn_phi(z[i+2]) @ self.M[i])
+                else:
+                    mu[i] = self.fn_g_hid(mu_W_input)
                 e[i] = self.fn_phi(z[i]) - mu[i]
 
         self.z = z
@@ -89,12 +117,16 @@ class GNCN_PDH:
 
         for l in range(0, self.L):
             dWl = self.fn_phi(self.z[l+1]).T @ self.e[l]
-
             dWl = avg_factor * dWl
             dEl = dWl.T
-
             self.W[l].grad = dWl
             self.E[l].grad = dEl
+
+        if self.alpha_m == 1:
+            for l in range(0, self.L - 1):
+                dMl = self.fn_phi(self.z[l+2]).T @ self.e[l]
+                dMl = avg_factor * dMl
+                self.M[l].grad = dMl
 
     def clip_weights(self):
         # clip column norms to 1
@@ -134,18 +166,36 @@ def preprocess_binary_mnist(batch_size, device):
 
     moving_collate = make_moving_collate_fn(device)
 
+    # split into train and validation
+    data_train, data_val = torch.utils.data.random_split(data_train, [50000, 10000])
+
     loader_train = torch.utils.data.DataLoader(data_train, batch_size=batch_size, shuffle=True, collate_fn=moving_collate)
-    return loader_train
+    loader_val = torch.utils.data.DataLoader(data_val, batch_size=batch_size, shuffle=False, collate_fn=moving_collate)
+    return loader_train, loader_val
 
 def binary_cross_entropy(targets, predictions, eps=1e-7):
     clamped_predictions = torch.clamp(predictions, min=eps, max=1.0 - eps)
     return -torch.sum(targets * torch.log(clamped_predictions) + (1.0 - targets) * torch.log(1.0 - clamped_predictions))
 
+def eval_model(model, loader):
+    num_samples = 0
+    tot_discrep = 0.
+    bce_loss = 0.
+    for (inputs, _targets) in loader:
+        inputs = inputs.view([-1, model.dim_inp])
+        out_pred = model.infer(inputs, K=50)
+        tot_discrep += model.calc_total_discrepancy()
+        bce_loss += binary_cross_entropy(inputs, out_pred)
+        num_samples += inputs.shape[0]
+    avg_discrep = tot_discrep / (1.0 * num_samples)
+    avg_bce_loss = bce_loss / (1.0 * num_samples)
+    print(f"(Eval)  Avg Total discrepancy = {avg_discrep}, Avg BCE loss: {avg_bce_loss}")
+    return avg_discrep, avg_bce_loss
 
-def run_ngc(seed):
+
+def run_ngc(seed, trial_name='ngc'):
     set_seed(seed)
 
-    num_classes = 10
     num_epochs = 50
     batch_size = 512
     lr = 0.001
@@ -156,16 +206,23 @@ def run_ngc(seed):
     K = 50
     beta = 0.1
     gamma = 0.001
+    alpha_m = 1
+
+    checkpoint_dir = 'checkpoints'
+    os.makedirs(checkpoint_dir, exist_ok=True)
 
 
     device_name = 'cuda' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device_name)
 
-    loader_train = preprocess_binary_mnist(batch_size, device)
+    loader_train, loader_val = preprocess_binary_mnist(batch_size, device)
 
-    model = GNCN_PDH(L=L, dim_top=dim_hid, dim_hid=dim_hid, dim_inp=dim_inp, weight_stddev=weight_stddev, beta=beta, gamma=gamma, device=device)
+    model = GNCN_PDH(L=L, dim_top=dim_hid, dim_hid=dim_hid, dim_inp=dim_inp, weight_stddev=weight_stddev, beta=beta, gamma=gamma, alpha_m=alpha_m, device=device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, maximize=False)
+
+    val_discrep, val_bce_loss = eval_model(model, loader_val)
+    best_val_bce_loss = val_bce_loss
 
     for epoch in range(num_epochs):
         print(f"--- Epoch {epoch}")
@@ -186,9 +243,18 @@ def run_ngc(seed):
             optimizer.step()
 
             model.clip_weights()
-        print(f"Avg Total discrepancy: {totd / (1.0 * num_samples)}, Avg BCE loss: {bce_loss / (1.0 * num_samples)}")
+
+        print(f"(Train) Avg Total discrepancy = {totd / (1.0 * num_samples)}, Avg BCE loss = {bce_loss / (1.0 * num_samples)}")
+
+        val_discrep, val_bce_loss = eval_model(model, loader_val)
+
+        if val_bce_loss < best_val_bce_loss:
+            checkpoint_filename = f'{checkpoint_dir}/{trial_name}-model.pt'
+            torch.save(model.state_dict(), checkpoint_filename)
+            print(f"Saved checkpoint to {checkpoint_filename} (BCE loss {best_val_bce_loss} -> {val_bce_loss})")
+            best_val_bce_loss = val_bce_loss
 
 
 
 if __name__ == '__main__':
-    run_ngc(314159)
+    run_ngc(314159, trial_name='base-ngc-skip')

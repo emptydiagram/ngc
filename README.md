@@ -65,9 +65,18 @@ where:
 
 Weight update pseudogradients are calculated
 
-$$\Delta W^\ell = e^\ell (\phi^{\ell + 1}(z^{\ell+1}))^\top$$
+$$\Delta W^\ell = e^{\ell-1} (\phi^{\ell}(z^{\ell}))^\top$$
 
 $$\Delta E^\ell = (\Delta W^\ell)^\top$$
 
+$$\Delta M^\ell = e^{\ell-2} (\phi^{\ell}(z^{\ell}))^\top$$
 
-TODO: $\Delta M^\ell$
+These are used by the optimizer (Adam in this case) to update the weights. `lr = 0.001` is used.
+
+
+## TODO
+
+ - lateral connections ($V^\ell$ matrices)
+ - error node precision matrices ($\Sigma^\ell$ matrices)
+ - generative sampling
+ - other datasets (FMNIST, KMNIST, etc.)
