@@ -81,6 +81,8 @@ class GNCN_PDH:
         self.z = z
         self.e = e
 
+        return mu[0]
+
     def calc_updates(self):
         batch_size = self.z[0].shape[0]
         avg_factor = -1.0 / (batch_size)
@@ -135,10 +137,15 @@ def preprocess_binary_mnist(batch_size, device):
     loader_train = torch.utils.data.DataLoader(data_train, batch_size=batch_size, shuffle=True, collate_fn=moving_collate)
     return loader_train
 
+def binary_cross_entropy(targets, predictions, eps=1e-7):
+    clamped_predictions = torch.clamp(predictions, min=eps, max=1.0 - eps)
+    return -torch.sum(targets * torch.log(clamped_predictions) + (1.0 - targets) * torch.log(1.0 - clamped_predictions))
+
 
 def run_ngc(seed):
     set_seed(seed)
 
+    num_classes = 10
     num_epochs = 50
     batch_size = 512
     lr = 0.001
@@ -163,21 +170,23 @@ def run_ngc(seed):
     for epoch in range(num_epochs):
         print(f"--- Epoch {epoch}")
         totd = 0.
+        bce_loss = 0.
         num_samples = 0
-        for i, (inputs, targets) in enumerate(loader_train):
+        for i, (inputs, _targets) in enumerate(loader_train):
             inputs = inputs.view([-1, dim_inp])
-            model.infer(inputs, K=K)
+            out_pred = model.infer(inputs, K=K)
 
             optimizer.zero_grad()
 
             model.calc_updates()
             totd += model.calc_total_discrepancy()
+            bce_loss += binary_cross_entropy(inputs, out_pred)
             num_samples += inputs.shape[0]
 
             optimizer.step()
 
             model.clip_weights()
-        print(f"Average Total discrepancy: {totd / (1.0 * num_samples)}")
+        print(f"Avg Total discrepancy: {totd / (1.0 * num_samples)}, Avg BCE loss: {bce_loss / (1.0 * num_samples)}")
 
 
 
