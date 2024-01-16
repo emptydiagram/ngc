@@ -1,17 +1,10 @@
-import os
-import random
+from utils import init_gaussian_dense, make_moving_collate_fn, set_seed
 
-import numpy as np
+import os
+
 import torch
 import torchvision
 
-def set_seed(seed):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-
-def init_gaussian_dense(dims, stddev, device):
-    return torch.empty(dims, requires_grad=False, device=device).normal_(mean=0.0, std=stddev)
 
 class GNCN_PDH:
     def __init__(self, L, dim_top, dim_hid, dim_inp, weight_stddev, beta=0.1, gamma=0.001, alpha_m=0, fn_phi_name='relu', fn_g_hid_name='relu', fn_g_out_name='sigmoid', device=None):
@@ -155,15 +148,6 @@ class Binarize(object):
     def __call__(self, data):
         return (data >= self.threshold).float()
 
-
-def make_moving_collate_fn(device):
-    def moving_collate(batch):
-        inputs, targets = zip(*batch)
-        inputs = torch.stack(inputs).to(device)
-        targets = torch.tensor(targets).to(device)
-        return inputs, targets
-
-    return moving_collate
 
 
 def preprocess_binary_mnist(batch_size, device):
