@@ -7,13 +7,16 @@ import torch.nn.functional as F
 import torchvision
 
 class NGC_Classify:
-    def __init__(self, L, dim_top, dim_hid, dim_bot, weight_stddev, beta=0.1, gamma=0.001, fn_phi_name='relu', fn_g_hid_name='identity', fn_g_out_name='softmax', device=None):
+    def __init__(self, L, dim_top, dim_hid, dim_bot, weight_stddev, beta=0.1, gamma=0.001, err_update_coeff=1.0, alpha_m=0,
+                 fn_phi_name='relu', fn_g_hid_name='identity', fn_g_out_name='softmax', device=None):
         self.L = L
         self.dim_top = dim_top
         self.dim_hid = dim_hid
         self.dim_bot = dim_bot
         self.beta = beta
         self.gamma = gamma # leak coefficient
+        self.err_update_coeff = err_update_coeff
+        self.alpha_m = alpha_m
 
         self.device = torch.device('cpu') if device is None else device
 
@@ -25,11 +28,19 @@ class NGC_Classify:
             + [init_gaussian_dense([dim_hid, dim_hid], weight_stddev, self.device) for _ in range(L-2)]
             + [init_gaussian_dense([dim_hid, dim_top], weight_stddev, self.device)])
 
+        self.M = []
+        if self.alpha_m > 0:
+            self.M = ([init_gaussian_dense([dim_hid, dim_bot], weight_stddev, self.device)]
+                + [init_gaussian_dense([dim_hid, dim_hid], weight_stddev, self.device) for _ in range(L-3)]
+                + [init_gaussian_dense([dim_top, dim_hid], weight_stddev, self.device)])
+
 
         if fn_phi_name == 'relu':
             self.fn_phi = torch.relu
+        elif fn_phi_name == 'sigmoid':
+            self.fn_phi = torch.sigmoid
         else:
-            raise NotImplementedError("Only relu is supported for phi.")
+            raise NotImplementedError("Only relu, sigmoid are supported for phi.")
 
         self.fn_phi_top = lambda x: x
 

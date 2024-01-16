@@ -1,4 +1,4 @@
-from utils import init_gaussian_dense, make_moving_collate_fn, set_seed
+from utils import init_gaussian_dense, make_lkwta, make_moving_collate_fn, set_seed
 
 import os
 
@@ -7,7 +7,8 @@ import torchvision
 
 
 class GNCN_PDH:
-    def __init__(self, L, dim_top, dim_hid, dim_inp, weight_stddev, beta=0.1, gamma=0.001, alpha_m=0, fn_phi_name='relu', fn_g_hid_name='relu', fn_g_out_name='sigmoid', device=None):
+    def __init__(self, L, dim_top, dim_hid, dim_inp, weight_stddev, beta=0.1, gamma=0.001, alpha_m=0,
+                 fn_phi_name='relu', fn_g_hid_name='relu', fn_g_out_name='sigmoid', use_lateral=False, device=None):
         self.L = L
         self.dim_top = dim_top
         self.dim_hid = dim_hid
@@ -15,6 +16,7 @@ class GNCN_PDH:
         self.beta = beta
         self.gamma = gamma # leak coefficient
         self.alpha_m = alpha_m
+        self.use_lateral = use_lateral
 
         self.device = torch.device('cpu') if device is None else device
 
@@ -32,6 +34,16 @@ class GNCN_PDH:
             self.M = ([init_gaussian_dense([dim_hid, dim_inp], weight_stddev, self.device)]
                 + [init_gaussian_dense([dim_hid, dim_hid], weight_stddev, self.device) for _ in range(L-3)]
                 + [init_gaussian_dense([dim_top, dim_hid], weight_stddev, self.device)])
+
+        self.V = []
+        self.wta_K_top = 18
+        self.wta_K_hid = 12
+        self.wta_inh = 0.1
+        self.wta_exc = 0.15
+        if self.use_lateral:
+            self.V = ([make_lkwta(dim_hid, self.wta_K_hid, self.wta_inh, self.wta_exc).to(self.device)]
+                + [make_lkwta(dim_hid, self.wta_K_hid, self.wta_inh, self.wta_exc).to(self.device) for _ in range(L-2)]
+                + [make_lkwta(dim_top, self.wta_K_top, self.wta_inh, self.wta_exc).to(self.device)])
 
 
         if fn_phi_name == 'relu':
@@ -89,7 +101,10 @@ class GNCN_PDH:
         for _ in range(K):
             for i in range(1, self.L + 1):
                 di = e[i-1] @ self.E[i-1] - e[i]
-                z[i] += self.beta * (-self.gamma * z[i] + di)
+                vi = 0.
+                if self.use_lateral:
+                    vi = self.fn_phi(z[i]) @ self.V[i-1]
+                z[i] += self.beta * (-self.gamma * z[i] + di - vi)
 
             mu_W_input = self.fn_phi(z[1]) @ self.W[0]
             if self.alpha_m == 1:
@@ -197,6 +212,7 @@ def run_ngc(seed, trial_name='ngc'):
     beta = 0.1
     gamma = 0.001
     alpha_m = 1
+    use_lateral = False
 
     checkpoint_dir = 'checkpoints'
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -207,7 +223,8 @@ def run_ngc(seed, trial_name='ngc'):
 
     loader_train, loader_val = preprocess_binary_mnist(batch_size, device)
 
-    model = GNCN_PDH(L=L, dim_top=dim_hid, dim_hid=dim_hid, dim_inp=dim_inp, weight_stddev=weight_stddev, beta=beta, gamma=gamma, alpha_m=alpha_m, device=device)
+    model = GNCN_PDH(L=L, dim_top=dim_hid, dim_hid=dim_hid, dim_inp=dim_inp, weight_stddev=weight_stddev,
+                     beta=beta, gamma=gamma, alpha_m=alpha_m, use_lateral=use_lateral, device=device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, maximize=False)
 
