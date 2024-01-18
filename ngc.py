@@ -1,4 +1,4 @@
-from utils import init_gaussian_dense, make_lkwta, make_moving_collate_fn, set_seed
+from utils import init_gaussian, init_uniform, make_lkwta, make_moving_collate_fn, set_seed
 
 import os
 
@@ -8,7 +8,7 @@ import torchvision
 
 class GNCN_PDH:
     def __init__(self, L, dim_top, dim_hid, dim_inp, weight_stddev, beta=0.1, gamma=0.001, use_skip=False,
-                 fn_phi_name='relu', fn_g_hid_name='relu', fn_g_out_name='sigmoid', use_lateral=False, device=None):
+                 fn_phi_name='relu', fn_g_hid_name='relu', fn_g_out_name='sigmoid', use_lateral=False, use_err_precision=False, device=None):
         self.L = L
         self.dim_top = dim_top
         self.dim_hid = dim_hid
@@ -17,23 +17,34 @@ class GNCN_PDH:
         self.gamma = gamma # leak coefficient
         self.use_skip = use_skip
         self.use_lateral = use_lateral
+        self.use_err_precision = use_err_precision
 
         self.device = torch.device('cpu') if device is None else device
 
-        self.W = ([init_gaussian_dense([dim_hid, dim_inp], weight_stddev, self.device)]
-            + [init_gaussian_dense([dim_hid, dim_hid], weight_stddev, self.device) for _ in range(L-2)]
-            + [init_gaussian_dense([dim_top, dim_hid], weight_stddev, self.device)])
+        self.W = ([init_gaussian([dim_hid, dim_inp], weight_stddev, self.device)]
+            + [init_gaussian([dim_hid, dim_hid], weight_stddev, self.device) for _ in range(L-2)]
+            + [init_gaussian([dim_top, dim_hid], weight_stddev, self.device)])
 
-        self.E = ([init_gaussian_dense([dim_inp, dim_hid], weight_stddev, self.device)]
-            + [init_gaussian_dense([dim_hid, dim_hid], weight_stddev, self.device) for _ in range(L-1)])
+        self.E = ([init_gaussian([dim_inp, dim_hid], weight_stddev, self.device)]
+            + [init_gaussian([dim_hid, dim_hid], weight_stddev, self.device) for _ in range(L-1)])
 
         # M3 is (dim_top, dim_hid)
         # M2 is (dim_hid, dim_inp)
         self.M = []
         if self.use_skip:
-            self.M = ([init_gaussian_dense([dim_hid, dim_inp], weight_stddev, self.device)]
-                + [init_gaussian_dense([dim_hid, dim_hid], weight_stddev, self.device) for _ in range(L-3)]
-                + [init_gaussian_dense([dim_top, dim_hid], weight_stddev, self.device)])
+            self.M = ([init_gaussian([dim_hid, dim_inp], weight_stddev, self.device)]
+                + [init_gaussian([dim_hid, dim_hid], weight_stddev, self.device) for _ in range(L-3)]
+                + [init_gaussian([dim_top, dim_hid], weight_stddev, self.device)])
+
+        # in ngc-learn implementation, e^0 doesnt use a precision matrix. we therefore create
+        # precision matrices for only e^1 to e^{L-1}
+        self.Sigma = []
+        self.Prec = []
+        init_sigma_var = 0.01
+        if self.use_err_precision:
+            self.Sigma = [init_uniform([dim_hid, dim_hid], -init_sigma_var, init_sigma_var, self.device) for _ in range(L-1)]
+            self.Prec = [None for _ in range(L-1)]
+            self.compute_precisions()
 
         self.V = []
         self.wta_K_top = 18
@@ -51,6 +62,8 @@ class GNCN_PDH:
         else:
             raise NotImplementedError("Only relu is supported for phi.")
 
+        self.fn_phi_out = lambda x: x
+
         if fn_g_hid_name == 'relu':
             self.fn_g_hid = torch.relu
         else:
@@ -65,7 +78,7 @@ class GNCN_PDH:
 
 
     def parameters(self):
-        return self.W + self.E + self.M
+        return self.W + self.E + self.M + self.Sigma
 
     def state_dict(self):
         state = {}
@@ -90,17 +103,19 @@ class GNCN_PDH:
         batch_size = x.shape[0]
         z = [x]
         e = [torch.zeros([batch_size, self.dim_inp], device=self.device)]
-        for l in range(self.L - 1):
+        for _ in range(self.L - 1):
             z.append(torch.zeros([batch_size, self.dim_hid], device=self.device))
             e.append(torch.zeros([batch_size, self.dim_hid], device=self.device))
         z.append(torch.zeros([batch_size, self.dim_top], device=self.device))
+        # e[L] is a dummy tensor that is initialized to zero and never updated
         e.append(torch.zeros([batch_size, self.dim_top], device=self.device))
 
         mu = [None for _ in range(self.L)]
+        e_out = [e[i] for i in range(len(e))]
 
         for _ in range(K):
             for i in range(1, self.L + 1):
-                di = e[i-1] @ self.E[i-1] - e[i]
+                di = e_out[i-1] @ self.E[i-1] - e_out[i]
                 vi = 0.
                 if self.use_lateral:
                     vi = self.fn_phi(z[i]) @ self.V[i-1]
@@ -111,7 +126,9 @@ class GNCN_PDH:
                 mu[0] = self.fn_g_out(mu_W_input + self.fn_phi(z[2]) @ self.M[0])
             else:
                 mu[0] = self.fn_g_out(mu_W_input)
-            e[0] = z[0] - mu[0]
+            e[0] = self.fn_phi_out(z[0]) - mu[0]
+            e_out[0] = e[0]
+
             for i in range(1, self.L):
                 mu_W_input = self.fn_phi(z[i+1]) @ self.W[i]
                 if self.use_skip and i < self.L - 1:
@@ -119,9 +136,14 @@ class GNCN_PDH:
                 else:
                     mu[i] = self.fn_g_hid(mu_W_input)
                 e[i] = self.fn_phi(z[i]) - mu[i]
+                if self.use_err_precision:
+                    e_out[i] = e[i] @ self.Prec[i-1]
+                else:
+                    e_out[i] = e[i]
 
         self.z = z
         self.e = e
+        self.e_out = e_out
 
         return mu[0]
 
@@ -130,7 +152,7 @@ class GNCN_PDH:
         avg_factor = -1.0 / (batch_size)
 
         for l in range(0, self.L):
-            dWl = self.fn_phi(self.z[l+1]).T @ self.e[l]
+            dWl = self.fn_phi(self.z[l+1]).T @ self.e_out[l]
             dWl = avg_factor * dWl
             dEl = dWl.T
             self.W[l].grad = dWl
@@ -138,9 +160,31 @@ class GNCN_PDH:
 
         if self.use_skip:
             for l in range(0, self.L - 1):
-                dMl = self.fn_phi(self.z[l+2]).T @ self.e[l]
+                dMl = self.fn_phi(self.z[l+2]).T @ self.e_out[l]
                 dMl = avg_factor * dMl
                 self.M[l].grad = dMl
+
+        if self.use_err_precision:
+            for l in range(0, self.L - 1):
+                Bl = (self.e[l+1].T @ self.e[l+1])
+                dSigmal = (Bl - self.Prec[l]) * 0.5
+                dSigmal = avg_factor * dSigmal
+                self.Sigma[l].grad = dSigmal
+
+
+    def compute_precisions(self, eps = 0.0002):
+        for l in range(self.L - 1):
+            Il = torch.eye(self.Sigma[l].shape[1], device=self.device)
+
+            # ensure diagonals are at least 1
+            sigmal = self.Sigma[l]
+            varl = torch.maximum(torch.tensor(1.0), sigmal) * Il
+            sigmal = varl + (sigmal * (1.0 - Il)) + eps
+            self.Sigma[l].copy_(sigmal)
+            Ll = torch.linalg.cholesky(self.Sigma[l])
+            self.Prec[l] = torch.linalg.solve_triangular(Ll, Il, upper=False)
+
+
 
     def clip_weights(self):
         # clip column norms to 1
@@ -149,6 +193,16 @@ class GNCN_PDH:
             self.W[l].copy_(self.W[l] / torch.maximum(Wl_col_norms, torch.tensor(1.0)))
             El_col_norms = self.E[l].norm(dim=0, keepdim=True)
             self.E[l].copy_(self.E[l] / torch.maximum(El_col_norms, torch.tensor(1.0)))
+
+        if self.use_skip:
+            for l in range(self.L - 1):
+                Ml_col_norms = self.M[l].norm(dim=0, keepdim=True)
+                self.M[l].copy_(self.M[l] / torch.maximum(Ml_col_norms, torch.tensor(1.0)))
+
+        if self.use_err_precision:
+            for l in range(self.L - 1):
+                Sigmal_col_norms = self.Sigma[l].norm(dim=0, keepdim=True)
+                self.Sigma[l].copy_(self.Sigma[l] / torch.maximum(Sigmal_col_norms, torch.tensor(1.0)))
 
 
     def calc_total_discrepancy(self):
@@ -212,7 +266,8 @@ def run_ngc(seed, trial_name='ngc'):
     beta = 0.1
     gamma = 0.001
     use_skip = True
-    use_lateral = False
+    use_lateral = True
+    use_err_precision = True
 
     checkpoint_dir = 'checkpoints'
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -224,7 +279,7 @@ def run_ngc(seed, trial_name='ngc'):
     loader_train, loader_val = preprocess_binary_mnist(batch_size, device)
 
     model = GNCN_PDH(L=L, dim_top=dim_hid, dim_hid=dim_hid, dim_inp=dim_inp, weight_stddev=weight_stddev,
-                     beta=beta, gamma=gamma, use_skip=use_skip, use_lateral=use_lateral, device=device)
+                     beta=beta, gamma=gamma, use_skip=use_skip, use_lateral=use_lateral, use_err_precision=use_err_precision, device=device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, maximize=False)
 
@@ -249,6 +304,7 @@ def run_ngc(seed, trial_name='ngc'):
 
             optimizer.step()
 
+            model.compute_precisions()
             model.clip_weights()
 
         print(f"(Train) Avg Total discrepancy = {totd / (1.0 * num_samples)}, Avg BCE loss = {bce_loss / (1.0 * num_samples)}")
