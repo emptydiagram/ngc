@@ -220,14 +220,29 @@ class GNCN_PDH_Classify:
 
 
 
-def preprocess_mnist(batch_size, device):
+def preprocess_mnist(batch_size, device, N_per_class=None):
     transforms = torchvision.transforms.Compose([torchvision.transforms.ToTensor()])
     data_train = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transforms)
 
     moving_collate = make_moving_collate_fn(device)
 
+    if N_per_class is not None:
+        selected_idxs = []
+        for label in range(10):
+            label_idxs = torch.where(data_train.targets == label)[0]
+            label_selected_idxs = label_idxs[torch.randperm(len(label_idxs))[:N_per_class]]
+            selected_idxs.extend(label_selected_idxs.tolist())
+
+        data_train = torch.utils.data.Subset(data_train, selected_idxs)
+
     # split into train and validation
-    data_train, data_val = random_split(data_train, [50000, 10000])
+    if N_per_class is None:
+        train_size, val_size = 50000, 10000
+    else:
+        val_size = int(0.15 * len(data_train))
+        train_size = len(data_train) - val_size
+
+    data_train, data_val = random_split(data_train, [train_size, val_size])
 
     loader_train = DataLoader(data_train, batch_size=batch_size, shuffle=True, collate_fn=moving_collate)
     loader_val = DataLoader(data_val, batch_size=batch_size, shuffle=False, collate_fn=moving_collate)
@@ -295,14 +310,15 @@ def eval_model(model, loader, num_classes):
 def run_ngc(seed, trial_name='ngc'):
     set_seed(seed)
 
-    num_epochs = 50
+    num_epochs = 200
     num_classes = 10
-    batch_size = 256
+    batch_size = 500
     lr = 0.001
     dim_inp = 784
-    dim_hid = 25
+    dim_hid = 360
     K = 60
     # err_update_coeff = 0.95
+    N_per_class = 300
 
     checkpoint_dir = 'checkpoints'
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -311,14 +327,14 @@ def run_ngc(seed, trial_name='ngc'):
     device_name = 'cuda' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device_name)
 
-    # loader_train, loader_val = preprocess_mnist(batch_size, device)
-    loader_train, loader_val = preprocess_mnist1d(batch_size, device)
+    loader_train, loader_val = preprocess_mnist(batch_size, device, N_per_class=N_per_class)
+    # loader_train, loader_val = preprocess_mnist1d(batch_size, device)
 
     ngc_config = {
-        'L': 3,
-        'dims': [num_classes, dim_hid, dim_hid, dim_inp],
-        'fns_phi': ['identity', 'relu', 'relu', 'identity'],
-        'fns_g': ['softmax', 'identity', 'identity', 'identity'],
+        'L': 4,
+        'dims': [num_classes, dim_hid, dim_hid, dim_hid, dim_inp],
+        'fns_phi': ['identity', 'relu', 'relu', 'relu', 'identity'],
+        'fns_g': ['softmax', 'identity', 'identity', 'identity', 'identity'],
         'weight_stddev': 0.025,
         'beta': 0.1,
         'leak': 0.001,
