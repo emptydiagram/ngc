@@ -76,7 +76,5 @@ These are used by the optimizer (Adam in this case) to update the weights. `lr =
 
 ## TODO
 
- - lateral connections ($V^\ell$ matrices)
- - error node precision matrices ($\Sigma^\ell$ matrices)
  - generative sampling
  - other datasets (FMNIST, KMNIST, etc.)
