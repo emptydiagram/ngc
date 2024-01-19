@@ -8,8 +8,11 @@ def set_seed(seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
 
-def init_gaussian_dense(dims, stddev, device):
+def init_gaussian(dims, stddev, device):
     return torch.empty(dims, requires_grad=False, device=device).normal_(mean=0.0, std=stddev)
+
+def init_uniform(dims, low, high, device):
+    return torch.empty(dims, requires_grad=False, device=device).uniform_(low, high)
 
 def make_moving_collate_fn(device):
     def moving_collate(batch):
