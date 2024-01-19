@@ -2,9 +2,12 @@ from utils import init_gaussian, init_uniform, make_moving_collate_fn, make_lkwt
 
 from operator import itemgetter
 import os
+import pickle
+import urllib
 
 import torch
 import torch.nn.functional as F
+from torch.utils.data import DataLoader, TensorDataset, random_split
 import torchvision
 
 class GNCN_PDH_Classify:
@@ -224,10 +227,46 @@ def preprocess_mnist(batch_size, device):
     moving_collate = make_moving_collate_fn(device)
 
     # split into train and validation
-    data_train, data_val = torch.utils.data.random_split(data_train, [50000, 10000])
+    data_train, data_val = random_split(data_train, [50000, 10000])
 
-    loader_train = torch.utils.data.DataLoader(data_train, batch_size=batch_size, shuffle=True, collate_fn=moving_collate)
-    loader_val = torch.utils.data.DataLoader(data_val, batch_size=batch_size, shuffle=False, collate_fn=moving_collate)
+    loader_train = DataLoader(data_train, batch_size=batch_size, shuffle=True, collate_fn=moving_collate)
+    loader_val = DataLoader(data_val, batch_size=batch_size, shuffle=False, collate_fn=moving_collate)
+    return loader_train, loader_val
+
+
+def download_mnist1d(data_path):
+    url = 'https://github.com/greydanus/mnist1d/raw/master/mnist1d_data.pkl'
+    with urllib.request.urlopen(url) as response, open(data_path, 'wb') as out_file:
+        data = response.read()
+        out_file.write(data)
+
+def preprocess_mnist1d(batch_size, device):
+    data_path = './data/mnist1d_data.pkl'
+    if not os.path.exists(data_path):
+        data_dir = os.path.dirname(data_path)
+        os.makedirs(data_dir, exist_ok=True)
+        download_mnist1d(data_path)
+
+    with open(data_path, 'rb') as handle:
+        data = pickle.load(handle)
+
+    X_train = torch.tensor(data['x'], dtype=torch.float32)
+    Y_train = torch.tensor(data['y'], dtype=torch.int64)
+    # X_test = torch.tensor(data['x_test'], dtype=torch.float32)
+    # Y_test = torch.tensor(data['y_test'], dtype=torch.float32)
+
+    train_dataset = TensorDataset(X_train, Y_train)
+
+    moving_collate = make_moving_collate_fn(device)
+
+    valid_frac = 0.1
+    valid_size = int(len(train_dataset) * valid_frac)
+    train_size = len(train_dataset) - valid_size
+    data_train, data_val = random_split(train_dataset, [train_size, valid_size])
+
+    loader_train = DataLoader(data_train, batch_size=batch_size, shuffle=True, collate_fn=moving_collate)
+    loader_val = DataLoader(data_val, batch_size=batch_size, shuffle=False, collate_fn=moving_collate)
+
     return loader_train, loader_val
 
 
@@ -272,7 +311,8 @@ def run_ngc(seed, trial_name='ngc'):
     device_name = 'cuda' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device_name)
 
-    loader_train, loader_val = preprocess_mnist(batch_size, device)
+    # loader_train, loader_val = preprocess_mnist(batch_size, device)
+    loader_train, loader_val = preprocess_mnist1d(batch_size, device)
 
     ngc_config = {
         'L': 3,
